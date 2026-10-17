@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<title>MIX PREPACK V55 - 表頭拖曳排序版</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f1f5f9;padding:12px}
+.card{max-width:3000px;margin:auto;background:#fff;padding:16px;border-radius:14px}
+.section{border:1px solid #cbd5e1;background:#f8fafc;padding:12px;border-radius:10px;margin-top:10px}
+table{width:100%;border-collapse:collapse;font-size:10px;margin-top:10px}
+th,td{border:1px solid #e2e8f0;padding:5px;white-space:nowrap;text-align:center;}
+th{background:#0f172a;color:#fff;position:sticky;top:0;cursor:grab;user-select:none;}
+th:active{cursor:grabbing;}
+#wrap{overflow:auto;max-height:45vh}
+.btn{padding:8px 12px;border:0;border-radius:8px;font-weight:700;cursor:pointer;margin:4px}
+.b1{background:#2563eb;color:#fff}.b2{background:#16a34a;color:#fff}.b3{background:#dc2626;color:#fff}.b4{background:#7c3aed;color:#fff}.b5{background:#ea580c;color:#fff}.b6{background:#0284c7;color:#fff}
+.bar{height:10px;background:#e2e8f0;border-radius:10px;overflow:hidden;margin:8px 0}
+.bar>div{height:100%;background:#16a34a;width:0%}
+.fail{color:#dc2626;font-weight:700;background:#fee2e2;padding:6px;border-radius:6px;margin-top:6px}
+.result-pre{background:#0f172a;color:#38bdf8;padding:12px;border-radius:6px;font-family:monospace;margin-top:8px;white-space:pre-wrap;font-size:12px}
+.matrix-th{background:#fef08a!important;color:#854d0e!important;}
+.column-picker{background:#e2e8f0;padding:8px;border-radius:6px;margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;font-size:11px;align-items:center;}
+.column-picker label{cursor:pointer;background:#fff;padding:2px 6px;border-radius:4px;border:1px solid #cbd5e1;}
+</style>
+</head>
+<body>
+<div class="card">
+<h3>MIX PREPACK V55 - 表頭拖曳排序版</h3>
+
+<div style="border:2px dashed #16a34a;background:#f0fdf4;padding:14px;border-radius:10px;text-align:center">
+  <input type="file" id="pdfs" multiple accept=".pdf">
+  <div><b>上傳 Hactl RCL PDF 檔案（可在下方表格直接按住表頭左右拖曳調位）</b></div>
+</div>
+<div class="bar"><div id="progress"></div></div>
+<div id="count" style="font-weight:700"></div>
+<div id="fail" class="fail" style="display:none"></div>
+
+<div class="section" style="background:#eff6ff;border-color:#bfdbfe;">
+  <b>🎛️ 檢視切換與工具</b>
+  <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+    <button class="btn b6" id="btnTabOriginal">📋 檢視原始 RCL 明細表</button>
+    <button class="btn b6" id="btnTabMatrix" style="background:#475569">📊 檢視混板矩陣表 (ULD / CON)</button>
+    <span style="border-left:2px solid #cbd5e1; height:24px; margin:0 4px;"></span>
+    <button class="btn b4" id="btnGenLoading">📦 生成 Hactl Loading (自動複製)</button>
+    <button class="btn b5" id="btnExportCurrentExcel">📥 匯出當前 Excel</button>
+    <button class="btn b3" id="btnClear">全部清空</button>
+  </div>
+
+  <div id="columnPickerPanel" class="column-picker">
+    <b>⚙️ 自訂顯示欄位 (自動記憶)：</b>
+    <span id="columnCheckboxes"></span>
+  </div>
+
+  <div id="loadingResult" class="result-pre" style="display:none">請輸入下方 MAWB 查詢 Loading...</div>
+  <div style="margin-top:8px;">
+    <input type="text" id="searchMawb" placeholder="輸入 MAWB 查詢 Loading (例如: 176-65279701)" style="padding:6px;width:280px;border:1px solid #94a3b8;border-radius:6px;">
+  </div>
+</div>
+
+<div style="margin-top:12px; font-weight:bold; color:#1e293b;" id="viewTitle">📋 目前顯示：原始 RCL 明細表（可直接拖曳表頭調換順序）</div>
+<div id="wrap"><table id="mainTbl"></table></div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+let all=[];
+let currentView = 'original';
+
+let defaultColumns = [
+  { key: 'filename', label: 'File' },
+  { key: 'preNo', label: 'Pre-decl No' },
+  { key: 'preType', label: 'Type' },
+  { key: 'uld', label: 'ULD' },
+  { key: 'uldPort', label: 'ULD Port' },
+  { key: 'uldType', label: 'ULD Type' },
+  { key: 'con', label: 'CON' },
+  { key: 'uldPcs', label: 'ULD Pcs' },
+  { key: 'gross', label: 'Gross' },
+  { key: 'tare', label: 'Tare' },
+  { key: 'net', label: 'Net' },
+  { key: 'awb', label: 'AWB' },
+  { key: 'awbPort', label: 'Port' },
+  { key: 'awbPcs', label: 'AWB Pcs' },
+  { key: 'awbWeight', label: 'AWB WT' },
+  { key: 'provPc', label: 'Prov PC' },
+  { key: 'provWt', label: 'Prov WT' },
+  { key: 'rclNo', label: 'RCL No' },
+  { key: 'rclTime', label: 'RCL Time' },
+  { key: 'lih', label: 'LIH' },
+  { key: 'lihUn', label: 'UN' },
+  { key: 'truck', label: 'Truck' }
+];
+
+let savedOrder = localStorage.getItem('mix_prepack_order');
+let allColumns = savedOrder ? JSON.parse(savedOrder) : defaultColumns;
+
+let savedCols = localStorage.getItem('mix_prepack_cols');
+let activeCols = savedCols ? JSON.parse(savedCols) : allColumns.map(c => c.key);
+
+function initControls() {
+  let container = document.getElementById('columnCheckboxes');
+  container.innerHTML = allColumns.map(c => {
+    let checked = activeCols.includes(c.key) ? 'checked' : '';
+    return `<label><input type="checkbox" value="${c.key}" ${checked} onchange="updateColumns()"> ${c.label}</label>`;
+  }).join('');
+}
+
+window.updateColumns = function() {
+  let checkboxes = document.querySelectorAll('#columnCheckboxes input');
+  activeCols = Array.from(checkboxes).filter(i => i.checked).map(i => i.value);
+  localStorage.setItem('mix_prepack_cols', JSON.stringify(activeCols));
+  if(currentView === 'original') renderOriginal();
+};
+
+function parse(text){
+  let t=text;
+  let preNo=(t.match(/Pre-declaration No\.\s*([0-9\-]+)/i)||[])[1]||'';
+  let preType=/MIX\s*PREPACK/i.test(t)?'MIX PREPACK':/PREPACK/i.test(t)?'PREPACK':/BULK/i.test(t)?'BULK':'';
+  let truck=(t.match(/Truck No\.\s*([A-Z0-9]+)/i)||[])[1]||'';
+  let aIdx=t.toLowerCase().indexOf('acceptance information'), sIdx=t.toLowerCase().indexOf('screening information');
+  let acceptArea=(aIdx>-1&&sIdx>-1)?t.substring(aIdx,sIdx):t.slice(0,2500);
+  let uld=(acceptArea.match(/\bPMC[0-9A-Z]{5,}\b/)||t.match(/\bPMC[0-9A-Z]{5,}\b/)||t.match(/\b[A-Z]{3}[0-9]{4,5}[A-Z]{2,3}\b/)||[])[0]||'';
+  
+  let uldPort=''; 
+  let mPorts=[...acceptArea.matchAll(/ULD Port\s+([A-Z0-9]{3,10})/gi)];
+  for(let mp of mPorts){
+    let v=mp[1].toUpperCase(); 
+    if(v.length===3 && !/^(PMC|PAG|AKE|N6|CON|SUB|END|RGN|MIX)$/i.test(v) && /^[A-Z]{3}$/.test(v)){
+      uldPort=v; 
+      break;
+    }
+  }
+  if(!uldPort){
+    let all3=[...acceptArea.matchAll(/\b([A-Z]{3})\b/g)].map(x=>x[1].toUpperCase()).filter(c=>!/^(PMC|PAG|ULD|CON|N6|SUB|END|RGN|BOX|ASP|MIX)$/i.test(c)); 
+    uldPort=all3.find(c=>/^(PRG|BUD|LGG|YYZ|JFK|FRA|DOH|HKG|SIN|BKK|NRT|BEG|AMS|GRU|HRE|DWC|JED|BEY|MAD|LUN|MRU|CMN|DSS|UIO|MEX|EBB|IST|MCT|LOS|FCO)$/.test(c))||all3[0]||'';
+  }
+
+  let uldType=(acceptArea.match(/\bN\d+\b/)||[])[0]||'';
+  let con=''; let mA=acceptArea.match(/Pieces\s+(\d+)\s+(?:Special Handling Code\s*)?([A-Z]{2}|[A-Z]\d)\s+SUBCON/i);
+  if(mA) con=mA[2].toUpperCase(); else{let mB=acceptArea.match(/CON\s+([A-Z]{2}|[A-Z]\d)\b/i); if(mB){let v=mB[1].toUpperCase(); if(!/^(EN|ST|ID|AS)$/.test(v)) con=v;}}
+  
+  let uldPcs=(acceptArea.match(/Pieces\s+(\d+)/i)||[])[1]||'', gross=(acceptArea.match(/Gross Weight\(KG\)\s*([\d\.]+)/i)||[])[1]||'', tare=(acceptArea.match(/Tare Weight\(KG\)\s*([\d\.]+)/i)||[])[1]||'', net=(acceptArea.match(/Net Weight\(KG\)\s*([\d\.]+)/i)||[])[1]||'';
+  if(parseFloat(gross)<parseFloat(tare)){let tmp=gross;gross=tare;tare=tmp;}
+
+  let awbIdx=t.toLowerCase().indexOf('awb information'), endIdx=t.toLowerCase().indexOf('total gross weight');
+  let awbArea = awbIdx>-1? t.slice(awbIdx, endIdx>-1?endIdx:undefined) : t;
+  awbArea=awbArea.replace(/ASP\s+N\s+Regulated Agent/gi,' ').replace(/\n/g,' ');
+
+  let rows=[];
+  let linePatterns = awbArea.split(/(\d{3}-\d{8})/g);
+  for(let i=1; i<linePatterns.length; i+=2) {
+    let awb = linePatterns[i];
+    let chunk = linePatterns[i+1] || '';
+    let parts = chunk.trim().split(/\s+/);
+    
+    if(parts.length >= 5) {
+      let awbPort = parts[0].length === 3 ? parts[0] : '';
+      let awbPcs = parts[1];
+      let awbWeight = parts[2];
+      let provPc = parts[3];
+      let provWt = parts[4];
+
+      if(provWt === '1.0' || provWt === '1' || isNaN(provWt)) {
+        let decimals = parts.filter(p => p.includes('.') && parseFloat(p) > 1.0);
+        if(decimals.length > 0) provWt = decimals[decimals.length - 1];
+      }
+
+      if(isNaN(provPc)) provPc = awbPcs;
+      if(isNaN(provWt)) provWt = awbWeight;
+
+      let rclNoMatch = chunk.match(/\b(RG[A-Z0-9]{1,2}\-\d{5,8})\b/i);
+      let rclNo = rclNoMatch ? rclNoMatch[1] : '';
+      
+      let rclTimeMatch = chunk.match(/\b(\d{2}[A-Z]{3}\s+\d{4})\b/i);
+      let rclTime = rclTimeMatch ? rclTimeMatch[1] : '';
+
+      let lihMatch = chunk.match(/\s+([YN])\s+/);
+      let lih = lihMatch ? lihMatch[1] : 'N';
+
+      let lihUn = '';
+      if(lih === 'Y') {
+        let unAreaMatch = chunk.match(/\s+[YN]\s+(.*?)\s+(?:RG[A-Z0-9]|\d{2}[A-Z]{3}|$)/i);
+        if(unAreaMatch && unAreaMatch[1]) {
+          let candidates = unAreaMatch[1].match(/\b\d{4}\b/g) || [];
+          let validUns = candidates.filter(u => u.startsWith('30') || u.startsWith('34') || u === '1845' || u === '1072');
+          lihUn = [...new Set(validUns)].join(' ');
+        }
+      }
+
+      rows.push({
+        preNo, preType, uld, uldPort, uldType, con, uldPcs, gross, tare, net,
+        awb, awbPort, awbPcs, awbWeight,
+        provPc: provPc, provWt: provWt,
+        rclNo, rclTime, lih, lihUn: lihUn, truck
+      });
+    }
+  }
+
+  return rows;
+}
+
+document.getElementById('pdfs').addEventListener('change', async e=>{
+  let files=[...e.target.files]; all=[]; let failed=[];
+  let prog=document.getElementById('progress');
+  for(let i=0;i<files.length;i++){
+    let f=files[i];
+    try{
+      let buf=await f.arrayBuffer(); let pdf=await pdfjsLib.getDocument({data:buf}).promise; let txt='';
+      for(let p=1;p<=pdf.numPages;p++){let page=await pdf.getPage(p); let c=await page.getTextContent(); txt+=c.items.map(o=>o.str).join(' ')+'\n';}
+      let rows=parse(txt);
+      if(rows.length===0) failed.push(f.name+' (捉唔到AWB)');
+      else rows.forEach(r=>r.filename=f.name), all=all.concat(rows);
+    }catch(err){failed.push(f.name+' (PDF讀取失敗)');}
+    prog.style.width=Math.round((i+1)/files.length*100)+'%';
+    document.getElementById('count').innerText=`處理中 ${i+1}/${files.length} | 已得 ${all.length} AWB`;
+    await new Promise(r=>setTimeout(r,5));
+  }
+  let uniqFiles=[...new Set(all.map(d=>d.filename))].length;
+  document.getElementById('count').innerText=`共 ${uniqFiles}/${files.length} 份PDF成功 | ${all.length} AWB`;
+  let failEl=document.getElementById('fail');
+  if(failed.length>0){failEl.style.display='block'; failEl.innerText='失敗/未提取：\n'+failed.join('\n');}
+  else failEl.style.display='none';
+  
+  refreshView();
+});
+
+document.getElementById('btnTabOriginal').onclick = () => {
+  currentView = 'original';
+  document.getElementById('btnTabOriginal').style.background = '#0284c7';
+  document.getElementById('btnTabMatrix').style.background = '#475569';
+  document.getElementById('viewTitle').innerText = '📋 目前顯示：原始 RCL 明細表（可直接拖曳表頭調換順序）';
+  document.getElementById('columnPickerPanel').style.display = 'flex';
+  refreshView();
+};
+
+document.getElementById('btnTabMatrix').onclick = () => {
+  currentView = 'matrix';
+  document.getElementById('btnTabMatrix').style.background = '#0284c7';
+  document.getElementById('btnTabOriginal').style.background = '#475569';
+  document.getElementById('viewTitle').innerText = '📊 目前顯示：Mix-load 矩陣混板表 (格式: ULD / CON)';
+  document.getElementById('columnPickerPanel').style.display = 'none';
+  refreshView();
+};
+
+function refreshView() {
+  if(currentView === 'original') renderOriginal();
+  else renderMatrix();
+}
+
+function renderOriginal(){
+  if(!all || all.length === 0) return;
+  
+  let visibleCols = allColumns.filter(c => activeCols.includes(c.key));
+  let html = `<tr><th style="width:40px;">#</th>` + visibleCols.map(c => {
+    return `<th draggable="true" ondragstart="onDragStart(event, '${c.key}')" ondragover="onDragOver(event)" ondrop="onDrop(event, '${c.key}')">${c.label} ⬍</th>`;
+  }).join('') + `</tr>`;
+
+  html += all.map((r, i) => {
+    let tds = visibleCols.map(c => {
+      let val = r[c.key] || '';
+      let style = '';
+      if(c.key === 'preType') style = 'background:#fef9c3;font-weight:bold;';
+      if(c.key === 'uldPort' || c.key === 'uld') style = 'background:#dbeafe;font-weight:bold;';
+      if(c.key === 'awb') style = 'font-weight:bold;';
+      if(c.key === 'awbPcs' || c.key === 'provPc') style = 'background:#fef3c7;font-weight:bold;color:#b45309;';
+      if(c.key === 'lihUn') style = 'background:#fee2e2;font-weight:bold;';
+      return `<td style="${style}">${val}</td>`;
+    }).join('');
+    return `<tr><td>${i+1}</td>${tds}</tr>`;
+  }).join('');
+
+  document.getElementById('mainTbl').innerHTML = html;
+}
+
+let draggedKey = null;
+window.onDragStart = function(e, key) {
+  draggedKey = key;
+  e.dataTransfer.effectAllowed = 'move';
+};
+
+window.onDragOver = function(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+};
+
+window.onDrop = function(e, targetKey) {
+  e.preventDefault();
+  if(!draggedKey || draggedKey === targetKey) return;
+
+  let fromIdx = allColumns.findIndex(c => c.key === draggedKey);
+  let toIdx = allColumns.findIndex(c => c.key === targetKey);
+
+  if(fromIdx > -1 && toIdx > -1) {
+    let movedItem = allColumns.splice(fromIdx, 1)[0];
+    allColumns.splice(toIdx, 0, movedItem);
+
+    localStorage.setItem('mix_prepack_order', JSON.stringify(allColumns));
+    initControls();
+    refreshView();
+  }
+};
+
+function renderMatrix(){
+  if(!all || all.length === 0) return;
+
+  let uldKeys = [...new Set(all.map(r => `${r.uld || 'BULK'} / ${r.con || 'YT'}`))].filter(Boolean).sort();
+  let mawbs = [...new Set(all.map(r => r.awb))].sort();
+
+  let matrixData = {};
+  let mawbTotals = {};
+  let uldTotals = {};
+
+  mawbs.forEach(m => { matrixData[m] = {}; mawbTotals[m] = {pcs: 0, wt: 0, dest: ''}; });
+  uldKeys.forEach(u => { uldTotals[u] = {pcs: 0, wt: 0}; });
+
+  all.forEach(r => {
+    let m = r.awb;
+    let uKey = `${r.uld || 'BULK'} / ${r.con || 'YT'}`;
+    if(!m) return;
+    let pcs = parseInt(r.provPc || r.awbPcs || 0);
+    let wt = parseFloat(r.provWt || r.awbWeight || 0);
+    
+    if(!matrixData[m][uKey]) matrixData[m][uKey] = {pcs: 0, wt: 0};
+    matrixData[m][uKey].pcs += pcs;
+    matrixData[m][uKey].wt += wt;
+
+    mawbTotals[m].pcs += pcs;
+    mawbTotals[m].wt += wt;
+    mawbTotals[m].dest = r.awbPort || r.uldPort || '';
+
+    uldTotals[uKey].pcs += pcs;
+    uldTotals[uKey].wt += wt;
+  });
+
+  let html = `<tr>
+    <th>MawbNo.</th>
+    <th>Dest.</th>
+    <th>Total Pcs</th>
+    <th>Total Wt.</th>`;
+  
+  uldKeys.forEach(uk => {
+    html += `<th class="matrix-th" colspan="2">${uk}</th>`;
+  });
+  html += `</tr>`;
+
+  html += `<tr><th colspan="4"></th>`;
+  uldKeys.forEach(() => {
+    html += `<th style="background:#fef9c3;color:#713f12">Pcs</th><th style="background:#fef9c3;color:#713f12">Wt.</th>`;
+  });
+  html += `</tr>`;
+
+  mawbs.forEach(m => {
+    html += `<tr>
+      <td><b>${m}</b></td>
+      <td>${mawbTotals[m].dest}</td>
+      <td style="background:#f1f5f9"><b>${mawbTotals[m].pcs}</b></td>
+      <td style="background:#f1f5f9"><b>${mawbTotals[m].wt.toFixed(1)}</b></td>`;
+    
+    uldKeys.forEach(uk => {
+      let cell = matrixData[m][uk];
+      if(cell && cell.pcs > 0) {
+        html += `<td style="background:#fefce8"><b>${cell.pcs}</b></td><td>${cell.wt.toFixed(1)}</td>`;
+      } else {
+        html += `<td></td><td></td>`;
+      }
+    });
+    html += `</tr>`;
+  });
+
+  html += `<tr style="background:#0f172a;color:#fff;font-weight:bold;">
+    <td colspan="2">TOTAL</td>
+    <td>${Object.values(mawbTotals).reduce((s,x)=>s+x.pcs,0)}</td>
+    <td>${Object.values(mawbTotals).reduce((s,x)=>s+x.wt,0).toFixed(1)}</td>`;
+  
+  uldKeys.forEach(uk => {
+    html += `<td>${uldTotals[uk].pcs}</td><td>${uldTotals[uk].wt.toFixed(1)}</td>`;
+  });
+  html += `</tr>`;
+
+  document.getElementById('mainTbl').innerHTML = html;
+  window._matrixUldKeys = uldKeys;
+  window._matrixMawbs = mawbs;
+  window._matrixData = matrixData;
+  window._mawbTotals = mawbTotals;
+  window._uldTotals = uldTotals;
+}
+
+document.getElementById('btnGenLoading').onclick = () => {
+  let query = document.getElementById('searchMawb').value.trim().toUpperCase();
+  let resBox = document.getElementById('loadingResult');
+  if(!query) { alert('請先輸入 MAWB 號碼'); return; }
+  if(!all || all.length === 0) { alert('請先上傳 PDF 資料'); return; }
+
+  let matched = all.filter(r => r.awb.toUpperCase().includes(query));
+  if(matched.length === 0) {
+    resBox.style.display = 'block';
+    resBox.innerText = `❌ 找不到包含 "${query}" 的 MAWB 記錄`;
+    return;
+  }
+
+  let loadingLines = matched.map(r => {
+    let p = r.provPc || r.awbPcs;
+    let w = parseFloat(r.provWt || r.awbWeight).toFixed(1);
+    let uld = r.uld || 'UNKNOWN_ULD';
+    let con = r.con || 'YT';
+    return `${p} PKGS LOADED ON ${uld} / ${con} / ${w} K`;
+  });
+
+  let report = `LOADING INFO:\n` + loadingLines.join('\n');
+  resBox.style.display = 'block';
+  resBox.innerText = report;
+  navigator.clipboard.writeText(report);
+};
+
+document.getElementById('btnExportCurrentExcel').onclick = () => {
+  if(!all || all.length === 0) return alert('無資料可匯出');
+
+  if(currentView === 'original') {
+    let visibleCols = allColumns.filter(c => activeCols.includes(c.key));
+    let exportData = all.map(r => {
+      let obj = {};
+      visibleCols.forEach(c => { obj[c.label] = r[c.key]; });
+      return obj;
+    });
+
+    let ws = XLSX.utils.json_to_sheet(exportData);
+    let wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'RCL_Original_Custom');
+    XLSX.writeFile(wb, `MIX_RCL_Custom_${new Date().toISOString().slice(0,10)}.xlsx`);
+  } else {
+    let uldKeys = window._matrixUldKeys;
+    let mawbs = window._matrixMawbs;
+    let matrixData = window._matrixData;
+    let mawbTotals = window._mawbTotals;
+    let uldTotals = window._uldTotals;
+
+    let headerRow1 = { 'MawbNo.': 'MawbNo.', 'Dest.': 'Dest.', 'Total Pcs': 'Total Pcs', 'Total Wt.': 'Total Wt.' };
+    let headerRow2 = { 'MawbNo.': '', 'Dest.': '', 'Total Pcs': '', 'Total Wt.': '' };
+
+    uldKeys.forEach(uk => {
+      headerRow1[uk + ' (Pcs)'] = uk;
+      headerRow1[uk + ' (Wt)'] = uk;
+      headerRow2[uk + ' (Pcs)'] = 'Pcs';
+      headerRow2[uk + ' (Wt)'] = 'Wt.';
+    });
+
+    let exportRows = [headerRow1, headerRow2];
+
+    mawbs.forEach(m => {
+      let rowObj = { 
+        'MawbNo.': m, 
+        'Dest.': mawbTotals[m].dest, 
+        'Total Pcs': mawbTotals[m].pcs, 
+        'Total Wt.': mawbTotals[m].wt.toFixed(1) 
+      };
+      uldKeys.forEach(uk => {
+        let cell = matrixData[m][uk];
+        rowObj[uk + ' (Pcs)'] = cell && cell.pcs > 0 ? cell.pcs : '';
+        rowObj[uk + ' (Wt)'] = cell && cell.wt > 0 ? cell.wt.toFixed(1) : '';
+      });
+      exportRows.push(rowObj);
+    });
+
+    let totalRow = {
+      'MawbNo.': 'TOTAL',
+      'Dest.': '',
+      'Total Pcs': Object.values(mawbTotals).reduce((s,x)=>s+x.pcs,0),
+      'Total Wt.': Object.values(mawbTotals).reduce((s,x)=>s+x.wt,0).toFixed(1)
+    };
+    uldKeys.forEach(uk => {
+      totalRow[uk + ' (Pcs)'] = uldTotals[uk].pcs;
+      totalRow[uk + ' (Wt)'] = uldTotals[uk].wt.toFixed(1);
+    });
+    exportRows.push(totalRow);
+
+    let ws = XLSX.utils.json_to_sheet(exportRows, {skipHeader: true});
+    let wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Mix_Matrix_Plan');
+    XLSX.writeFile(wb, `Mix_Matrix_Plan_Report_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }
+};
+
+document.getElementById('btnClear').onclick = () => {
+  all = [];
+  document.getElementById('mainTbl').innerHTML = '';
+  document.getElementById('count').innerText = '已清空';
+  document.getElementById('fail').style.display = 'none';
+  document.getElementById('progress').style.width = '0%';
+  document.getElementById('loadingResult').style.display = 'none';
+};
+
+initControls();
+</script>
+</body>
+</html>
